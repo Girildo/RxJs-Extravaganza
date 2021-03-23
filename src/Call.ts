@@ -1,69 +1,63 @@
-import { bindCallback, defer, EMPTY, identity, interval, Observable, of, scheduled, Subject, throwError, timer } from "rxjs"
-import { catchError, delay, delayWhen, filter, flatMap, map, mergeMap, mergeMapTo, retryWhen, sample, switchAll, switchMap, switchMapTo, tap, withLatestFrom } from "rxjs/operators";
+import {
+  defer, Observable, Subject, throwError, timer,
+} from 'rxjs';
+import {
+  catchError, filter, map, switchAll,
+} from 'rxjs/operators';
 
-
-
-function Mock<T>(token: string): Observable<T> {
-    return timer(1000)
-        .pipe(
-            map(_ => {
-                if (token === '42')
-                    return <T><unknown>"Everything OK";
-                else {
-                    throw (401);
-                    // const chance = Math.random();
-                    // if (chance < 0.1 || token === '42')
-                    //     return <T><unknown>"Everything OK";
-                    // else if (chance < 0.95)
-                    //     throw (401);
-                    // else
-                    //     throw (500);
-                }
-            })
-        );
-}
-
-
+// Mock store
 const store$ = new Subject<{ [key: string]: string }>();
+/**
+ * Mocks the HttpRequest
+ * @param token Mock parameter, the request succeeds if and only if token equals the string 42
+ * @returns The mocked Observable<T>
+ */
+function Mock<T>(token: string): Observable<T> {
+  return timer(1000)
+    .pipe(
+      map((_) => {
+        if (token === '42') { return <T><unknown>'Everything OK'; }
 
-function dispatchRefresh(): void {
-    store$.next({ 'unrelated': 'Something we dont care about' });
-    console.log(new Date() + " Action is being dispatched!")
-    setTimeout(() => {
-        store$.next({ 'token': '42' });
-        console.log(new Date() + " Token refreshed!")
-    }, Math.random() * 8000);
-    // store$.next({ 'token': '42' });
+        throw (new Error('401'));
+      }),
+    );
 }
 
-export function Call<T>(opts: { token: string }): Observable<T> {
+/**
+ * Simulates the dispatch of the refresh action.
+ * In this experiment, this action always succeeds after a random delay between 0 and 8 seconds.
+ */
+function dispatchRefresh(): void {
+  store$.next({ unrelated: 'Something we dont care about' });
+  console.log(`${new Date()} Action is being dispatched!`);
+  setTimeout(() => {
+    store$.next({ token: '42' });
+  }, Math.random() * 8000);
+}
 
-    console.log("Calling Call with opts", opts);
+export default function Call<T>(opts: { token: string }): Observable<T> {
+  console.log('Calling Call with opts', opts);
 
-    return Mock<T>(opts.token)
-        .pipe(
-            // emits input observable unless there is error
-            catchError((error, caught) => {
-                if (error === 500)
-                    return throwError('Fatal error');
-                else {
-                    console.log('Caught transient error ' + error);
-                    const refreshToken$ = defer(() => {
-                        dispatchRefresh();
-                        return store$.pipe(filter(v => v.token !== undefined), map(v => v.token));
-                    }
-                    )
+  // Start by calling the service. If everything is right, we're happy and done
+  return Mock<T>(opts.token)
+    .pipe(
+      // catch the error
+      catchError((error, caught) => {
+        // If we cannot recover, we just forward the error to the caller
+        if (error === 500) { return throwError('Fatal error'); }
 
-                    const obs = refreshToken$
-                        .pipe(refr =>
-                            refr.pipe(
-                                map(k => Call<T>({ token: k }),
-                                ),
-                                switchAll()
-                            ));
-                    return obs;
-                }
-            }),
-        );
-} 
+        console.log(`Caught transient error ${error}`);
+        const refreshToken$ = defer(() => {
+          dispatchRefresh();
+          return store$.pipe(filter((v) => v.token !== undefined), map((v) => v.token));
+        });
 
+        const obs = refreshToken$
+          .pipe((refr) => refr.pipe(
+            map((k) => Call<T>({ token: k })),
+            switchAll(),
+          ));
+        return obs;
+      }),
+    );
+}
